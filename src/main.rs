@@ -1,5 +1,6 @@
 use iced::widget::{button, column, container, row, text, text_input};
 use iced::{Center, Color, Element, Fill, Length};
+use std::fmt::Write;
 
 mod wordle;
 use wordle::{CellColor, Filter, ValidWords};
@@ -11,14 +12,15 @@ const DISPLAYED_TEXT_ALLOC: usize = 400;
 static WORDS: ValidWords = ValidWords::new();
 
 pub fn main() -> iced::Result {
-    iced::application(Example::default, Example::update, Example::view).run()
+    iced::application(App::init, App::update, App::view).run()
 }
 
 #[derive(Debug, Clone)]
-struct Example {
+struct App {
     filter: Filter,
     selected_cell: Option<(usize, usize)>,
     input_text: String,
+    displayed_text: String,
     matching_words: [Option<String>; WORDS_TO_TAKE],
 }
 
@@ -30,19 +32,59 @@ enum Message {
     CycleColor(usize, usize),
 }
 
-impl Default for Example {
-    fn default() -> Self {
+impl App {
+    fn init() -> Self {
         Self {
             filter: Filter::new(),
             selected_cell: None,
             input_text: String::with_capacity(3),
+            displayed_text: String::with_capacity(DISPLAYED_TEXT_ALLOC),
             matching_words: Default::default(),
         }
     }
-}
 
-impl Example {
-    fn fill_words_array(filter: impl Iterator<Item = String>) -> [Option<String>; WORDS_TO_TAKE] {
+    fn update_displayed_text(&mut self) {
+        self.displayed_text.clear();
+        for (row_idx, row) in self.filter.0.iter().enumerate() {
+            unsafe { write!(self.displayed_text, "Row {}: ", row_idx + 1).unwrap_unchecked() };
+            for cell in row {
+                match cell.character {
+                    Some(ch) => {
+                        self.displayed_text.push(ch);
+                        self.displayed_text.push_str(match cell.color {
+                            CellColor::Gray => "-Gray ",
+                            CellColor::Yellow => "-Yellow ",
+                            CellColor::Green => "-Green ",
+                        });
+                    }
+                    None => self.displayed_text.push_str("_ "),
+                }
+            }
+            self.displayed_text.push('\n');
+        }
+
+        unsafe {
+            writeln!(
+                self.displayed_text,
+                "\nMatching Words (Up to {}):",
+                WORDS_TO_TAKE
+            )
+            .unwrap_unchecked();
+        }
+
+        if self.matching_words[0].is_none() {
+            self.displayed_text.push_str("No matches found.");
+        } else {
+            for word in self.matching_words.iter().flatten() {
+                self.displayed_text.push_str(&word);
+                self.displayed_text.push('\n');
+            }
+        }
+    }
+
+    fn update_matching_words(
+        filter: impl Iterator<Item = String>,
+    ) -> [Option<String>; WORDS_TO_TAKE] {
         let mut array: [Option<String>; WORDS_TO_TAKE] = Default::default();
         for (i, word) in filter.enumerate() {
             array[i] = Some(word);
@@ -68,7 +110,8 @@ impl Example {
                     self.filter
                         .set(row, col, ch.to_ascii_lowercase(), current_color);
                     let words = WORDS.filter(&self.filter, WORDS_TO_TAKE);
-                    self.matching_words = Self::fill_words_array(words);
+                    self.matching_words = Self::update_matching_words(words);
+                    self.update_displayed_text();
                 }
             }
 
@@ -81,7 +124,8 @@ impl Example {
                     self.filter
                         .set(row, col, ch.to_ascii_lowercase(), current_color);
                     let words = WORDS.filter(&self.filter, WORDS_TO_TAKE);
-                    self.matching_words = Self::fill_words_array(words);
+                    self.matching_words = Self::update_matching_words(words);
+                    self.update_displayed_text();
                 }
             }
 
@@ -90,7 +134,8 @@ impl Example {
                 let new_color = self.filter.0[row][col].color.next();
                 self.filter.set(row, col, current_char, new_color);
                 let words = WORDS.filter(&self.filter, WORDS_TO_TAKE);
-                self.matching_words = Self::fill_words_array(words);
+                self.matching_words = Self::update_matching_words(words);
+                self.update_displayed_text();
             }
         }
     }
@@ -172,45 +217,15 @@ impl Example {
             column![text("Click a cell to select it")]
         };
 
-        column![text("6x5 Grid").size(20), grid_column, input_section,]
+        column![text("Wordle Grid").size(20), grid_column, input_section,]
             .spacing(20)
             .into()
     }
 
     fn view_text_display(&self) -> Element<'_, Message> {
-        let mut display_text = String::with_capacity(DISPLAYED_TEXT_ALLOC);
-
-        for (row_idx, row) in self.filter.0.iter().enumerate() {
-            display_text.push_str(&format!("Row {}: ", row_idx + 1));
-            for cell in row {
-                match cell.character {
-                    Some(ch) => {
-                        let color_indicator = match cell.color {
-                            CellColor::Gray => "-Gray",
-                            CellColor::Yellow => "-Yellow",
-                            CellColor::Green => "-Green",
-                        };
-                        display_text.push_str(&format!("{}{} ", ch, color_indicator));
-                    }
-                    None => display_text.push_str("_ "),
-                }
-            }
-            display_text.push('\n');
-        }
-
-        display_text.push_str(&format!("\nMatching Words (Up to {}):\n", WORDS_TO_TAKE));
-
-        if self.matching_words[0].is_none() {
-            display_text.push_str("No matches found.");
-        } else {
-            for word in self.matching_words.iter().flatten() {
-                display_text.push_str(&format!("{}\n", word));
-            }
-        }
-
         column![
-            text("Current Grid State").size(20),
-            container(text(display_text).size(16).width(Fill))
+            text("Console*").size(20),
+            container(text(&self.displayed_text).size(16).width(Fill))
                 .width(Fill)
                 .height(Fill)
                 .padding(15)
