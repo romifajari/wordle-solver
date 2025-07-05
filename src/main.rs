@@ -1,99 +1,232 @@
-mod words;
+use iced::widget::{button, column, container, row, text, text_input};
+use iced::{Center, Color, Element, Fill, Length};
 
-use std::io::{self, Write};
-use std::sync::LazyLock;
-use words::{Filter, ValidWords};
+mod wordle;
+use wordle::{CellColor, Filter, ValidWords};
 
-static VALID_WORDS: LazyLock<ValidWords> = LazyLock::new(ValidWords::new);
+type RGB = (f32, f32, f32);
 
-fn parse_index_char_pairs(arg: &str) -> Vec<(usize, char)> {
-    arg.split(',')
-        .filter_map(|pair| {
-            let mut parts = pair.split('-');
-            match (parts.next(), parts.next()) {
-                (Some(index), Some(ch)) => {
-                    if let (Ok(i), Some(c)) = (index.parse::<usize>(), ch.chars().next()) {
-                        if i < 5 {
-                            return Some((i, c));
-                        }
-                    }
-                    None
-                }
-                _ => None,
-            }
-        })
-        .collect()
+const WORDS_TO_TAKE: usize = 10;
+const DISPLAYED_TEXT_ALLOC: usize = 400;
+static WORDS: ValidWords = ValidWords::new();
+
+pub fn main() -> iced::Result {
+    iced::application(Example::default, Example::update, Example::view).run()
 }
 
-fn main() {
-    let mut filter = Filter::new();
+#[derive(Debug, Clone)]
+struct Example {
+    filter: Filter,
+    selected_cell: Option<(usize, usize)>,
+    input_text: String,
+    matching_words: [Option<String>; WORDS_TO_TAKE],
+}
 
-    println!("Wordle Solver REPL");
-    println!("Commands:");
-    println!("  green <index-char>[,more]   - Set green letters, e.g. green 0-s,1-t");
-    println!("  yellow <index-char>[,more]  - Set yellow letters, e.g. yellow 2-a,3-e");
-    println!("  gray <index-char>[,more]    - Set gray letters, e.g. gray 1-e,4-f");
-    println!("  run                         - Show matching words");
-    println!("  reset                       - Clear all filters");
-    println!("  exit                        - Quit");
+#[derive(Debug, Clone)]
+enum Message {
+    CellClicked(usize, usize),
+    InputChanged(String),
+    SetCharacter,
+    CycleColor(usize, usize),
+}
 
-    loop {
-        print!("> ");
-        io::stdout().flush().unwrap();
+impl Default for Example {
+    fn default() -> Self {
+        Self {
+            filter: Filter::new(),
+            selected_cell: None,
+            input_text: String::with_capacity(3),
+            matching_words: Default::default(),
+        }
+    }
+}
 
-        let mut input = String::new();
-        if io::stdin().read_line(&mut input).is_err() {
-            println!("Error reading input");
-            continue;
+impl Example {
+    fn fill_words_array(filter: impl Iterator<Item = String>) -> [Option<String>; WORDS_TO_TAKE] {
+        let mut array: [Option<String>; WORDS_TO_TAKE] = Default::default();
+        for (i, word) in filter.enumerate() {
+            array[i] = Some(word);
+        }
+        array
+    }
+
+    fn update(&mut self, message: Message) {
+        match message {
+            Message::CellClicked(row, col) => {
+                self.selected_cell = Some((row, col));
+                self.input_text.clear();
+            }
+
+            Message::InputChanged(text) => {
+                self.input_text = text;
+
+                if let Some((row, col)) = self.selected_cell
+                    && let Some(ch) = self.input_text.chars().last()
+                    && ch.is_alphabetic()
+                {
+                    let current_color = self.filter.0[row][col].color;
+                    self.filter
+                        .set(row, col, ch.to_ascii_lowercase(), current_color);
+                    let words = WORDS.filter(&self.filter, WORDS_TO_TAKE);
+                    self.matching_words = Self::fill_words_array(words);
+                }
+            }
+
+            Message::SetCharacter => {
+                if let Some((row, col)) = self.selected_cell
+                    && let Some(ch) = self.input_text.chars().last()
+                    && ch.is_alphabetic()
+                {
+                    let current_color = self.filter.0[row][col].color;
+                    self.filter
+                        .set(row, col, ch.to_ascii_lowercase(), current_color);
+                    let words = WORDS.filter(&self.filter, WORDS_TO_TAKE);
+                    self.matching_words = Self::fill_words_array(words);
+                }
+            }
+
+            Message::CycleColor(row, col) => {
+                let current_char = self.filter.0[row][col].character.unwrap_or('_');
+                let new_color = self.filter.0[row][col].color.next();
+                self.filter.set(row, col, current_char, new_color);
+                let words = WORDS.filter(&self.filter, WORDS_TO_TAKE);
+                self.matching_words = Self::fill_words_array(words);
+            }
+        }
+    }
+
+    fn view(&self) -> Element<'_, Message> {
+        let left_pane = self.view_grid();
+        let right_pane = self.view_text_display();
+
+        row![
+            container(left_pane)
+                .width(Length::FillPortion(1))
+                .height(Fill)
+                .padding(20),
+            container(right_pane)
+                .width(Length::FillPortion(1))
+                .height(Fill)
+                .padding(20)
+        ]
+        .spacing(10)
+        .into()
+    }
+
+    fn view_grid(&self) -> Element<'_, Message> {
+        let mut grid_column = column![].spacing(5);
+
+        for (row_idx, row) in self.filter.0.iter().enumerate() {
+            let mut grid_row = row![].spacing(5);
+
+            for (col_idx, cell) in row.iter().enumerate() {
+                let is_selected = self.selected_cell == Some((row_idx, col_idx));
+
+                let cell_content = match cell.character {
+                    Some(ch) => ch.to_ascii_uppercase(),
+                    None => '_',
+                };
+
+                let cell_button = button(text(cell_content).size(24).width(Fill).align_x(Center))
+                    .width(60)
+                    .height(60)
+                    .style(move |_theme, _status| {
+                        let base_color = cell.color.to_color();
+                        let border_color = if is_selected {
+                            Color::from_rgb(0.0, 0.0, 1.0)
+                        } else {
+                            Color::from_rgb(0.2, 0.2, 0.2)
+                        };
+
+                        button::Style {
+                            background: Some(base_color.into()),
+                            border: iced::Border {
+                                width: if is_selected { 3.0 } else { 1.0 },
+                                color: border_color,
+                                radius: 5.0.into(),
+                            },
+                            text_color: Color::WHITE,
+                            ..button::Style::default()
+                        }
+                    })
+                    .on_press(Message::CellClicked(row_idx, col_idx));
+
+                grid_row = grid_row.push(cell_button);
+            }
+
+            grid_column = grid_column.push(grid_row);
         }
 
-        let parts: Vec<_> = input.trim().split_whitespace().collect();
-        if parts.is_empty() {
-            continue;
+        let input_section = if let Some((row, col)) = self.selected_cell {
+            column![
+                text(format!("Selected: Row {}, Col {}", row + 1, col + 1)),
+                text_input("Enter character...", &self.input_text)
+                    .on_input(Message::InputChanged)
+                    .on_submit(Message::SetCharacter),
+                button("Cycle Color")
+                    .on_press(Message::CycleColor(row, col))
+                    .style(button::secondary),
+            ]
+            .spacing(10)
+        } else {
+            column![text("Click a cell to select it")]
+        };
+
+        column![text("6x5 Grid").size(20), grid_column, input_section,]
+            .spacing(20)
+            .into()
+    }
+
+    fn view_text_display(&self) -> Element<'_, Message> {
+        let mut display_text = String::with_capacity(DISPLAYED_TEXT_ALLOC);
+
+        for (row_idx, row) in self.filter.0.iter().enumerate() {
+            display_text.push_str(&format!("Row {}: ", row_idx + 1));
+            for cell in row {
+                match cell.character {
+                    Some(ch) => {
+                        let color_indicator = match cell.color {
+                            CellColor::Gray => "-Gray",
+                            CellColor::Yellow => "-Yellow",
+                            CellColor::Green => "-Green",
+                        };
+                        display_text.push_str(&format!("{}{} ", ch, color_indicator));
+                    }
+                    None => display_text.push_str("_ "),
+                }
+            }
+            display_text.push('\n');
         }
 
-        match parts[0] {
-            "green" if parts.len() == 2 => {
-                for (index, c) in parse_index_char_pairs(parts[1]) {
-                    filter = filter.add_green(index, c);
-                    println!("Added green: {} at {}", c, index);
-                }
-            }
+        display_text.push_str(&format!("\nMatching Words (Up to {}):\n", WORDS_TO_TAKE));
 
-            "yellow" if parts.len() == 2 => {
-                for (index, c) in parse_index_char_pairs(parts[1]) {
-                    filter = filter.add_yellow(index, c);
-                    println!("Added yellow: {} not at {}", c, index);
-                }
-            }
-
-            "gray" if parts.len() == 2 => {
-                for (index, c) in parse_index_char_pairs(parts[1]) {
-                    filter = filter.add_gray(index, c);
-                    println!("Added gray: {} not at {}", c, index);
-                }
-            }
-
-            "run" => {
-                let matches = VALID_WORDS.filter_and_format(&filter);
-                println!("Matches ({}):", matches.len());
-                for word in matches {
-                    println!("{}", word);
-                }
-            }
-
-            "reset" => {
-                filter = Filter::new();
-                println!("Filter reset.");
-            }
-
-            "exit" => {
-                break;
-            }
-
-            _ => {
-                println!("Unknown or malformed command");
+        if self.matching_words[0].is_none() {
+            display_text.push_str("No matches found.");
+        } else {
+            for word in self.matching_words.iter().flatten() {
+                display_text.push_str(&format!("{}\n", word));
             }
         }
+
+        column![
+            text("Current Grid State").size(20),
+            container(text(display_text).size(16).width(Fill))
+                .width(Fill)
+                .height(Fill)
+                .padding(15)
+                .style(|_theme| {
+                    container::Style {
+                        background: Some(Color::from_rgb(0.0, 0.0, 0.0).into()),
+                        border: iced::Border {
+                            width: 1.0,
+                            color: Color::from_rgb(0.8, 0.8, 0.8),
+                            radius: 5.0.into(),
+                        },
+                        ..container::Style::default()
+                    }
+                })
+        ]
+        .spacing(10)
+        .into()
     }
 }
