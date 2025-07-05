@@ -8,7 +8,7 @@ const GREEN: RGB = (0.0, 0.7, 0.0);
 
 pub struct ValidWords([[char; 5]; 14855]);
 
-include!("./words.rs");
+include!("./words.txt");
 
 impl ValidWords {
     pub const fn new() -> Self {
